@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Agentic FIFA Assistant</title>
+  <style>
+    :root {
+      color-scheme: light;
+    }
+    body {
+      font-family: "Segoe UI", Arial, sans-serif;
+      margin: 0;
+      background: linear-gradient(135deg, #eff6ff, #f8fbff 60%, #eefdf3);
+      color: #1f2937;
+      min-height: 100vh;
+    }
+    .container {
+      max-width: 860px;
+      margin: 28px auto;
+      padding: 24px;
+      background: rgba(255,255,255,0.95);
+      border-radius: 20px;
+      box-shadow: 0 15px 35px rgba(37, 99, 235, 0.12);
+      backdrop-filter: blur(6px);
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+    h1 {
+      margin: 0;
+      color: #2563eb;
+      font-size: 1.7rem;
+    }
+    .subtle {
+      color: #64748b;
+      margin-top: 4px;
+    }
+    .chip-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 12px 0 16px;
+    }
+    .chip {
+      background: #eff6ff;
+      color: #1d4ed8;
+      border: 1px solid #bfdbfe;
+      padding: 7px 10px;
+      border-radius: 999px;
+      cursor: pointer;
+      font-size: 0.92rem;
+    }
+    .chip:hover {
+      background: #dbeafe;
+    }
+    #chat {
+      border: 1px solid #dbeafe;
+      border-radius: 14px;
+      padding: 12px;
+      min-height: 340px;
+      max-height: 440px;
+      margin-bottom: 12px;
+      background: linear-gradient(180deg, #f8fbff, #fefefe);
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .msg {
+      max-width: 82%;
+      padding: 10px 12px;
+      border-radius: 12px;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      box-shadow: 0 2px 6px rgba(15, 23, 42, 0.05);
+    }
+    .msg.user {
+      background: #dbeafe;
+      align-self: flex-end;
+      border-bottom-right-radius: 4px;
+    }
+    .msg.agent {
+      background: #ecfdf5;
+      align-self: flex-start;
+      border-bottom-left-radius: 4px;
+    }
+    .meta {
+      font-size: 0.78rem;
+      color: #64748b;
+      margin-bottom: 4px;
+    }
+    .composer {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    input[type="text"] {
+      flex: 1;
+      padding: 11px 12px;
+      border: 1px solid #cbd5e1;
+      border-radius: 10px;
+      font-size: 1rem;
+    }
+    button {
+      padding: 10px 14px;
+      border: none;
+      border-radius: 10px;
+      background: linear-gradient(135deg, #2563eb, #1d4ed8);
+      color: white;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    button:hover { filter: brightness(1.04); }
+    button.secondary {
+      background: #e2e8f0;
+      color: #334155;
+    }
+    .status {
+      font-size: 0.9rem;
+      color: #64748b;
+      margin-top: 8px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div>
+        <h1>Agentic FIFA World Cup Assistant</h1>
+        <div class="subtle">Ask about wins, goals, comparisons, or dataset summaries.</div>
+      </div>
+      <button class="secondary" onclick="clearChat()">Clear chat</button>
+    </div>
+
+    <div class="chip-row">
+      <span class="chip" onclick="fillPrompt('Which country has the most wins?')">Most wins</span>
+      <span class="chip" onclick="fillPrompt('Compare Brazil and Germany')">Compare two teams</span>
+      <span class="chip" onclick="fillPrompt('Summarize the dataset')">Summarize dataset</span>
+    </div>
+
+    <div id="chat"></div>
+
+    <div class="composer">
+      <input id="prompt" type="text" placeholder="Type your question here..." />
+      <button onclick="sendPrompt()">Send</button>
+    </div>
+    <div class="status">Conversation history is saved locally in this browser.</div>
+  </div>
+
+  <script>
+    const STORAGE_KEY = 'fifa-agent-chat-v1';
+    let messages = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+
+    function renderMessages() {
+      const chat = document.getElementById('chat');
+      chat.innerHTML = '';
+
+      if (!messages.length) {
+        messages = [{ role: 'agent', text: 'Hello! I can help you analyze the FIFA dataset.', time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) }];
+      }
+
+      messages.forEach((message) => {
+        const wrap = document.createElement('div');
+        wrap.className = `msg ${message.role}`;
+        const meta = document.createElement('div');
+        meta.className = 'meta';
+        meta.textContent = message.role === 'user' ? 'You' : 'Agent';
+        const body = document.createElement('div');
+        body.textContent = message.text;
+        if (message.time) {
+          const time = document.createElement('div');
+          time.className = 'meta';
+          time.textContent = message.time;
+          wrap.appendChild(meta);
+          wrap.appendChild(body);
+          wrap.appendChild(time);
+        } else {
+          wrap.appendChild(meta);
+          wrap.appendChild(body);
+        }
+        chat.appendChild(wrap);
+      });
+
+      chat.scrollTop = chat.scrollHeight;
+    }
+
+    function saveMessages() {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(messages));
+    }
+
+    function addMessage(role, text) {
+      messages.push({ role, text, time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) });
+      saveMessages();
+      renderMessages();
+    }
+
+    function fillPrompt(text) {
+      document.getElementById('prompt').value = text;
+      document.getElementById('prompt').focus();
+    }
+
+    function clearChat() {
+      messages = [];
+      localStorage.removeItem(STORAGE_KEY);
+      renderMessages();
+    }
+
+    async function sendPrompt() {
+      const input = document.getElementById('prompt');
+      const text = input.value.trim();
+      if (!text) return;
+
+      addMessage('user', text);
+      input.value = '';
+
+      const pendingIndex = messages.length;
+      messages.push({ role: 'agent', text: 'Thinking...', time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) });
+      saveMessages();
+      renderMessages();
+
+      try {
+        const response = await fetch('/ask', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt: text })
+        });
+        const data = await response.json();
+        messages[pendingIndex] = { role: 'agent', text: data.reply || 'No response.', time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) };
+      } catch (err) {
+        messages[pendingIndex] = { role: 'agent', text: 'Error connecting to the agent.', time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) };
+      }
+
+      saveMessages();
+      renderMessages();
+    }
+
+    document.getElementById('prompt').addEventListener('keydown', function (event) {
+      if (event.key === 'Enter') {
+        sendPrompt();
+      }
+    });
+
+    renderMessages();
+  </script>
+</body>
+</html>
