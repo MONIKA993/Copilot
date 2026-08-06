@@ -2,7 +2,9 @@ import json
 import os
 import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import Any, Dict, List
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+from uuid import uuid4
 
 COUNTRIES: List[Dict[str, Any]] = [
     {"country": "Brazil", "wins": 5, "hosts": 2, "goals": 230},
@@ -11,6 +13,30 @@ COUNTRIES: List[Dict[str, Any]] = [
     {"country": "Argentina", "wins": 3, "hosts": 2, "goals": 150},
     {"country": "France", "wins": 2, "hosts": 2, "goals": 140},
 ]
+
+MEMORY_FILE = Path(__file__).with_name("agent_memory.json")
+STATE: Dict[str, Dict[str, Any]] = {}
+
+
+def load_state() -> None:
+    global STATE
+    if MEMORY_FILE.exists():
+        try:
+            with MEMORY_FILE.open("r", encoding="utf-8") as handle:
+                loaded = json.load(handle)
+            STATE = loaded if isinstance(loaded, dict) else {}
+        except Exception:
+            STATE = {}
+    else:
+        STATE = {}
+
+
+def save_state() -> None:
+    with MEMORY_FILE.open("w", encoding="utf-8") as handle:
+        json.dump(STATE, handle, indent=2)
+
+
+load_state()
 
 
 def get_country_data() -> List[Dict[str, Any]]:
@@ -69,12 +95,65 @@ TOOLS = {
 }
 
 
-def make_system_prompt() -> str:
+def ensure_session(session_id: str) -> Dict[str, Any]:
+    if session_id not in STATE:
+        STATE[session_id] = {"history": [], "facts": []}
+    return STATE[session_id]
+
+
+def update_memory(session_state: Dict[str, Any], user_prompt: str) -> None:
+    prompt = user_prompt.strip()
+    if not prompt:
+        return
+
+    lower_prompt = prompt.lower()
+    if "remember" in lower_prompt:
+        fact = prompt.split("remember", 1)[1].strip().strip(".?!")
+        if fact and fact not in session_state.get("facts", []):
+            session_state.setdefault("facts", []).append(fact)
+    elif "i prefer" in lower_prompt:
+        fact = prompt.strip().rstrip(".?!")
+        if fact and fact not in session_state.get("facts", []):
+            session_state.setdefault("facts", []).append(fact)
+    elif "my name is" in lower_prompt:
+        fact = prompt.strip().rstrip(".?!")
+        if fact and fact not in session_state.get("facts", []):
+            session_state.setdefault("facts", []).append(fact)
+
+    history = session_state.setdefault("history", [])
+    if len(history) > 12:
+        session_state["history"] = history[-12:]
+
+
+def build_memory_context(session_state: Dict[str, Any]) -> str:
+    facts = session_state.get("facts", [])
+    history = session_state.get("history", [])
+    memory_lines: List[str] = []
+
+    if facts:
+        memory_lines.append("User memory: " + "; ".join(facts[-3:]))
+
+    if history:
+        recent_turns = [f"{entry['role']}: {entry['content']}" for entry in history[-4:]]
+        memory_lines.append("Recent context: " + " | ".join(recent_turns))
+
+    return " ".join(memory_lines)
+
+
+def make_system_prompt(session_state: Optional[Dict[str, Any]] = None) -> str:
     tool_names = ", ".join(TOOLS.keys())
+    memory_context = ""
+    if session_state:
+        memory_context = build_memory_context(session_state)
+        if memory_context:
+            memory_context = f" Session memory: {memory_context}."
+
     return (
         "You are an agentic FIFA World Cup assistant. "
         "Use the available tools whenever the user asks about countries, winners, goals, or comparisons. "
-        f"Available tools: {tool_names}. "
+        "Keep short-term state across this chat and remember simple user preferences when they are stated. "
+        f"Available tools: {tool_names}."
+        f"{memory_context}"
         "Return valid JSON only with one of these shapes: "
         '{"tool": "tool_name", "arguments": {...}} or {"final_answer": "..."}.'
     )
@@ -211,9 +290,10 @@ class AgentHandler(BaseHTTPRequestHandler):
         body = self.rfile.read(length).decode("utf-8")
         payload = json.loads(body)
         prompt = payload.get("prompt", "")
+        session_id = payload.get("session_id")
 
-        response = handle_prompt(prompt)
-        reply = json.dumps({"reply": response}).encode("utf-8")
+        result = handle_prompt(prompt, session_id)
+        reply = json.dumps(result).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(reply)))
@@ -224,32 +304,39 @@ class AgentHandler(BaseHTTPRequestHandler):
         return
 
 
-def handle_prompt(user_prompt: str) -> str:
-    system_prompt = make_system_prompt()
+def handle_prompt(user_prompt: str, session_id: Optional[str] = None) -> Dict[str, Any]:
+    resolved_session_id = session_id or str(uuid4())
+    session_state = ensure_session(resolved_session_id)
+    session_state.setdefault("history", []).append({"role": "user", "content": user_prompt})
+    update_memory(session_state, user_prompt)
+
+    system_prompt = make_system_prompt(session_state)
     plan = call_llm(system_prompt, user_prompt)
     if not plan:
         plan = fallback_plan(user_prompt)
 
     if "final_answer" in plan:
-        return plan["final_answer"]
+        answer = plan["final_answer"]
+    else:
+        tool_name = plan.get("tool")
+        arguments = plan.get("arguments", {})
+        result = execute_tool(tool_name, arguments)
+        answer = format_result(tool_name, result)
 
-    tool_name = plan.get("tool")
-    arguments = plan.get("arguments", {})
-    result = execute_tool(tool_name, arguments)
-    answer = format_result(tool_name, result)
+        if os.getenv("OPENAI_API_KEY"):
+            final_prompt = (
+                f"The user asked: {user_prompt}\n"
+                f"The tool used was: {tool_name}\n"
+                f"The tool result was: {json.dumps(result, ensure_ascii=False)}\n"
+                "Write a short, natural-language answer."
+            )
+            llm_answer = call_llm(system_prompt, final_prompt)
+            if llm_answer and "final_answer" in llm_answer:
+                answer = llm_answer["final_answer"]
 
-    if os.getenv("OPENAI_API_KEY"):
-        final_prompt = (
-            f"The user asked: {user_prompt}\n"
-            f"The tool used was: {tool_name}\n"
-            f"The tool result was: {json.dumps(result, ensure_ascii=False)}\n"
-            "Write a short, natural-language answer."
-        )
-        llm_answer = call_llm(system_prompt, final_prompt)
-        if llm_answer and "final_answer" in llm_answer:
-            return llm_answer["final_answer"]
-
-    return answer
+    session_state.setdefault("history", []).append({"role": "assistant", "content": answer})
+    save_state()
+    return {"reply": answer, "session_id": resolved_session_id}
 
 
 def run_agent() -> None:
