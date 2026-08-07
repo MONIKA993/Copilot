@@ -251,8 +251,9 @@ def call_llm(system_prompt: str, user_prompt: str) -> Dict[str, Any]:
     if not api_key:
         return {}
 
+    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
     payload = {
-        "model": "gpt-4o-mini",
+        "model": model,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
