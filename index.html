@@ -125,6 +125,26 @@
       color: #64748b;
       margin-top: 8px;
     }
+    .tool-list {
+      margin: 12px 0 16px;
+      padding: 12px;
+      border: 1px solid #dbeafe;
+      border-radius: 12px;
+      background: #f8fbff;
+    }
+    .tool-list h3 {
+      margin: 0 0 8px;
+      font-size: 0.95rem;
+      color: #1d4ed8;
+    }
+    .tool-list ul {
+      margin: 0;
+      padding-left: 18px;
+      color: #334155;
+    }
+    .tool-list li {
+      margin: 4px 0;
+    }
   </style>
 </head>
 <body>
@@ -144,6 +164,7 @@
     </div>
 
     <div id="chat"></div>
+    <div id="tool-list" class="tool-list" aria-live="polite"></div>
 
     <div class="composer">
       <input id="prompt" type="text" placeholder="Type your question here..." />
@@ -158,6 +179,7 @@
     let messages = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
     let sessionId = localStorage.getItem(SESSION_STORAGE_KEY);
     let sessionMemory = [];
+    let availableTools = [];
 
     function renderMessages() {
       const chat = document.getElementById('chat');
@@ -209,6 +231,17 @@
       status.textContent = `${sessionText} ${memoryText}`;
     }
 
+    function renderTools() {
+      const container = document.getElementById('tool-list');
+      if (!availableTools.length) {
+        container.innerHTML = '';
+        return;
+      }
+
+      const items = availableTools.map((tool) => `<li><strong>${tool.name}</strong> — ${tool.description}</li>`).join('');
+      container.innerHTML = `<h3>Available tools</h3><ul>${items}</ul>`;
+    }
+
     function addMessage(role, text) {
       messages.push({ role, text, time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) });
       saveMessages();
@@ -255,6 +288,10 @@
         if (Array.isArray(data.memory)) {
           sessionMemory = data.memory;
         }
+        if (Array.isArray(data.tools)) {
+          availableTools = data.tools;
+          renderTools();
+        }
         messages[pendingIndex] = { role: 'agent', text: data.reply || 'No response.', time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) };
       } catch (err) {
         messages[pendingIndex] = { role: 'agent', text: 'Error connecting to the agent.', time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) };
@@ -273,6 +310,7 @@
 
     renderMessages();
     renderStatus();
+    renderTools();
   </script>
 </body>
 </html>

@@ -117,6 +117,16 @@ TOOLS = {
 }
 
 
+def get_tool_catalog() -> List[Dict[str, Any]]:
+    return [
+        {
+            "name": name,
+            "description": tool.__name__.replace("_", " "),
+        }
+        for name, tool in TOOLS.items()
+    ]
+
+
 def ensure_session(session_id: str) -> Dict[str, Any]:
     if session_id not in STATE:
         STATE[session_id] = {"history": [], "facts": []}
@@ -169,7 +179,9 @@ def trim_history(session_state: Dict[str, Any], max_entries: int = 12) -> None:
 
 
 def make_system_prompt(session_state: Optional[Dict[str, Any]] = None) -> str:
-    tool_names = ", ".join(TOOLS.keys())
+    tool_catalog = get_tool_catalog()
+    tool_names = ", ".join(tool["name"] for tool in tool_catalog)
+    descriptions = "; ".join(f"{tool['name']}: {tool['description']}" for tool in tool_catalog)
     memory_context = ""
     if session_state:
         memory_context = build_memory_context(session_state)
@@ -180,7 +192,8 @@ def make_system_prompt(session_state: Optional[Dict[str, Any]] = None) -> str:
         "You are an agentic FIFA World Cup assistant. "
         "Use the available tools whenever the user asks about countries, winners, goals, or comparisons. "
         "Keep short-term state across this chat and remember simple user preferences when they are stated. "
-        f"Available tools: {tool_names}."
+        f"Available tools: {tool_names}. "
+        f"Tool descriptions: {descriptions}."
         f"{memory_context}"
         "Return valid JSON only with one of these shapes: "
         '{"tool": "tool_name", "arguments": {...}} or {"final_answer": "..."}.'
@@ -398,6 +411,7 @@ def handle_prompt(user_prompt: str, session_id: Optional[str] = None) -> Dict[st
         "session_id": resolved_session_id,
         "memory": session_state.get("facts", []),
         "state": {"history": session_state.get("history", [])},
+        "tools": get_tool_catalog(),
     }
 
 
