@@ -1,16 +1,17 @@
 import json
 import os
 import urllib.request
+from urllib.parse import urlparse, parse_qs
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
+from datetime import datetime
 
 COUNTRIES: List[Dict[str, Any]] = [
     {"country": "Brazil", "wins": 5, "hosts": 2, "goals": 237},
     {"country": "Germany", "wins": 4, "hosts": 1, "goals": 226},
     {"country": "Italy", "wins": 4, "hosts": 2, "goals": 178},
-from datetime import datetime
     {"country": "Argentina", "wins": 3, "hosts": 2, "goals": 161},
     {"country": "France", "wins": 2, "hosts": 2, "goals": 145},
     {"country": "Uruguay", "wins": 2, "hosts": 1, "goals": 110},
@@ -21,11 +22,9 @@ from datetime import datetime
 ]
 
 MEMORY_FILE = Path(__file__).with_name("agent_memory.json")
-STATE: Dict[str, Dict[str, Any]] = {}
-            STATE = loaded if isinstance(loaded, dict) else {}
-            # Ensure episodic memory container exists
-            if isinstance(STATE, dict) and "episodes" not in STATE:
-                STATE.setdefault("episodes", [])
+# STATE stores session-state keyed by session id, and a top-level 'episodes' list
+STATE: Dict[str, Any] = {}
+
 
 def load_state() -> None:
     global STATE
@@ -39,50 +38,26 @@ def load_state() -> None:
     else:
         STATE = {}
 
+    # ensure episodic container
+    if isinstance(STATE, dict) and "episodes" not in STATE:
+        STATE.setdefault("episodes", [])
+
 
 def save_state() -> None:
     with MEMORY_FILE.open("w", encoding="utf-8") as handle:
         json.dump(STATE, handle, indent=2)
-    # Include recent episodic memory (global)
-    episodes = STATE.get("episodes", [])
-    if episodes:
-        last_eps = episodes[-3:]
-        ep_lines = [f"{ep.get('time','')}: {ep.get('content','')}" for ep in last_eps]
-        memory_lines.append("Recent episodes: " + " | ".join(ep_lines))
 
 
 load_state()
 
 
+# --- Dataset tools ---
 def get_country_data() -> List[Dict[str, Any]]:
     return COUNTRIES
 
 
 def get_country_stats(country_name: str) -> Dict[str, Any]:
     for country in COUNTRIES:
-
-
-def add_episodic_memory(content: str, session_id: Optional[str] = None) -> Dict[str, Any]:
-    """Append an episodic memory entry to the global store."""
-    entry = {
-        "id": str(uuid4()),
-        "session_id": session_id,
-        "time": datetime.utcnow().isoformat() + "Z",
-        "content": content,
-    }
-    STATE.setdefault("episodes", []).append(entry)
-    save_state()
-    return entry
-
-
-def get_episodic_memory(n: int = 5) -> List[Dict[str, Any]]:
-    eps = STATE.get("episodes", [])
-    return eps[-n:]
-
-
-def search_episodic_memory(query: str) -> List[Dict[str, Any]]:
-    query_l = query.lower()
-    return [ep for ep in STATE.get("episodes", []) if query_l in ep.get("content", "").lower()]
         if country["country"].lower() == country_name.lower():
             return country
     return {"error": f"Country '{country_name}' not found"}
@@ -136,6 +111,30 @@ def summarize_dataset() -> Dict[str, Any]:
     }
 
 
+# --- Episodic memory helpers ---
+def add_episodic_memory(content: str, session_id: Optional[str] = None) -> Dict[str, Any]:
+    entry = {
+        "id": str(uuid4()),
+        "session_id": session_id,
+        "time": datetime.utcnow().isoformat() + "Z",
+        "content": content,
+    }
+    STATE.setdefault("episodes", []).append(entry)
+    save_state()
+    return entry
+
+
+def get_episodic_memory(n: int = 5) -> List[Dict[str, Any]]:
+    eps = STATE.get("episodes", [])
+    return eps[-n:]
+
+
+def search_episodic_memory(query: str) -> List[Dict[str, Any]]:
+    q = query.lower()
+    return [ep for ep in STATE.get("episodes", []) if q in ep.get("content", "").lower()]
+
+
+# --- Tool registry ---
 TOOLS = {
     "get_country_data": get_country_data,
     "get_country_stats": get_country_stats,
@@ -155,14 +154,12 @@ TOOLS = {
 
 def get_tool_catalog() -> List[Dict[str, Any]]:
     return [
-        {
-            "name": name,
-            "description": tool.__name__.replace("_", " "),
-        }
+        {"name": name, "description": tool.__name__.replace("_", " ")}
         for name, tool in TOOLS.items()
     ]
 
 
+# --- Session and memory management ---
 def ensure_session(session_id: str) -> Dict[str, Any]:
     if session_id not in STATE:
         STATE[session_id] = {"history": [], "facts": []}
@@ -204,6 +201,13 @@ def build_memory_context(session_state: Dict[str, Any]) -> str:
     if history:
         recent_turns = [f"{entry['role']}: {entry['content']}" for entry in history[-4:]]
         memory_lines.append("Recent context: " + " | ".join(recent_turns))
+
+    # Include recent episodic memory (global)
+    episodes = STATE.get("episodes", [])
+    if episodes:
+        last_eps = episodes[-3:]
+        ep_lines = [f"{ep.get('time','')}: {ep.get('content','')}" for ep in last_eps]
+        memory_lines.append("Recent episodes: " + " | ".join(ep_lines))
 
     return " ".join(memory_lines)
 
@@ -379,7 +383,8 @@ def format_result(tool_name: str, result: Any) -> str:
 
 class AgentHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        if self.path == "/":
+        parsed = urlparse(self.path)
+        if parsed.path == "/":
             with open("index.html", "r", encoding="utf-8") as handle:
                 content = handle.read().encode("utf-8")
             self.send_response(200)
@@ -390,32 +395,85 @@ class AgentHandler(BaseHTTPRequestHandler):
                 self.wfile.write(content)
             except (ConnectionAbortedError, BrokenPipeError):
                 return
+        elif parsed.path == "/episodes":
+            # optional ?n= to limit most-recent episodes
+            qs = parse_qs(parsed.query)
+            try:
+                n = int(qs.get("n", ["10"])[0])
+            except Exception:
+                n = 10
+            eps = get_episodic_memory(n)
+            payload = json.dumps({"episodes": eps}).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            try:
+                self.wfile.write(payload)
+            except (ConnectionAbortedError, BrokenPipeError):
+                return
+        elif parsed.path == "/episodes/search":
+            qs = parse_qs(parsed.query)
+            q = qs.get("q", [""])[0]
+            results = search_episodic_memory(q) if q else []
+            payload = json.dumps({"results": results}).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            try:
+                self.wfile.write(payload)
+            except (ConnectionAbortedError, BrokenPipeError):
+                return
         else:
             self.send_response(404)
             self.end_headers()
 
     def do_POST(self):
-        if self.path != "/ask":
-            self.send_response(404)
+        if self.path == "/ask":
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length).decode("utf-8")
+            payload = json.loads(body)
+            prompt = payload.get("prompt", "")
+            session_id = payload.get("session_id")
+
+            result = handle_prompt(prompt, session_id)
+            reply = json.dumps(result).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(reply)))
             self.end_headers()
+            try:
+                self.wfile.write(reply)
+            except (ConnectionAbortedError, BrokenPipeError):
+                return
             return
 
-        length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(length).decode("utf-8")
-        payload = json.loads(body)
-        prompt = payload.get("prompt", "")
-        session_id = payload.get("session_id")
+        if self.path == "/episodes":
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length).decode("utf-8")
+            payload = json.loads(body)
+            content = payload.get("content", "")
+            session_id = payload.get("session_id")
+            if not content:
+                self.send_response(400)
+                self.end_headers()
+                return
+            entry = add_episodic_memory(content, session_id)
+            reply = json.dumps(entry).encode("utf-8")
+            self.send_response(201)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(reply)))
+            self.end_headers()
+            try:
+                self.wfile.write(reply)
+            except (ConnectionAbortedError, BrokenPipeError):
+                return
+            return
 
-        result = handle_prompt(prompt, session_id)
-        reply = json.dumps(result).encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(reply)))
+        # unknown POST path
+        self.send_response(404)
         self.end_headers()
-        try:
-            self.wfile.write(reply)
-        except (ConnectionAbortedError, BrokenPipeError):
-            return
 
     def log_message(self, format, *args):
         return
