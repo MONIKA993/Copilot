@@ -29,6 +29,56 @@
       {
         "role": "assistant",
         "content": "Brazil vs Germany: Brazil has 5 wins and 230 goals; Germany has 4 wins and 200 goals. Winner by wins: Brazil. Winner by goals: Brazil."
+      },
+      {
+        "role": "user",
+        "content": "Compare Brazil and Germany"
+      },
+      {
+        "role": "assistant",
+        "content": "Brazil vs Germany: Brazil has 5 wins and 237 goals; Germany has 4 wins and 226 goals. Winner by wins: Brazil. Winner by goals: Brazil."
+      },
+      {
+        "role": "user",
+        "content": "Summarize the dataset"
+      },
+      {
+        "role": "assistant",
+        "content": "There are 10 countries in the dataset. The top wins country is Brazil and the top goals country is Brazil."
+      },
+      {
+        "role": "user",
+        "content": "get country data"
+      },
+      {
+        "role": "assistant",
+        "content": "Country 'get country' not found"
+      }
+    ],
+    "facts": []
+  },
+  "76702032-8cb4-4f03-9440-2704eb453fbd": {
+    "history": [
+      {
+        "role": "user",
+        "content": "Compare Brazil and Germany"
+      },
+      {
+        "role": "assistant",
+        "content": "Brazil vs Germany: Brazil has 5 wins and 237 goals; Germany has 4 wins and 226 goals. Winner by wins: Brazil. Winner by goals: Brazil."
+      }
+    ],
+    "facts": []
+  },
+  "d5c0abaa-5890-4bf5-b34b-7728001733a7": {
+    "history": [
+      {
+        "role": "user",
+        "content": "Which country has the most wins?"
+      },
+      {
+        "role": "assistant",
+        "content": "Brazil has the most wins with 5 wins."
       }
     ],
     "facts": []

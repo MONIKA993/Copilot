@@ -10,6 +10,7 @@ COUNTRIES: List[Dict[str, Any]] = [
     {"country": "Brazil", "wins": 5, "hosts": 2, "goals": 237},
     {"country": "Germany", "wins": 4, "hosts": 1, "goals": 226},
     {"country": "Italy", "wins": 4, "hosts": 2, "goals": 178},
+from datetime import datetime
     {"country": "Argentina", "wins": 3, "hosts": 2, "goals": 161},
     {"country": "France", "wins": 2, "hosts": 2, "goals": 145},
     {"country": "Uruguay", "wins": 2, "hosts": 1, "goals": 110},
@@ -21,7 +22,10 @@ COUNTRIES: List[Dict[str, Any]] = [
 
 MEMORY_FILE = Path(__file__).with_name("agent_memory.json")
 STATE: Dict[str, Dict[str, Any]] = {}
-
+            STATE = loaded if isinstance(loaded, dict) else {}
+            # Ensure episodic memory container exists
+            if isinstance(STATE, dict) and "episodes" not in STATE:
+                STATE.setdefault("episodes", [])
 
 def load_state() -> None:
     global STATE
@@ -39,6 +43,12 @@ def load_state() -> None:
 def save_state() -> None:
     with MEMORY_FILE.open("w", encoding="utf-8") as handle:
         json.dump(STATE, handle, indent=2)
+    # Include recent episodic memory (global)
+    episodes = STATE.get("episodes", [])
+    if episodes:
+        last_eps = episodes[-3:]
+        ep_lines = [f"{ep.get('time','')}: {ep.get('content','')}" for ep in last_eps]
+        memory_lines.append("Recent episodes: " + " | ".join(ep_lines))
 
 
 load_state()
@@ -50,6 +60,29 @@ def get_country_data() -> List[Dict[str, Any]]:
 
 def get_country_stats(country_name: str) -> Dict[str, Any]:
     for country in COUNTRIES:
+
+
+def add_episodic_memory(content: str, session_id: Optional[str] = None) -> Dict[str, Any]:
+    """Append an episodic memory entry to the global store."""
+    entry = {
+        "id": str(uuid4()),
+        "session_id": session_id,
+        "time": datetime.utcnow().isoformat() + "Z",
+        "content": content,
+    }
+    STATE.setdefault("episodes", []).append(entry)
+    save_state()
+    return entry
+
+
+def get_episodic_memory(n: int = 5) -> List[Dict[str, Any]]:
+    eps = STATE.get("episodes", [])
+    return eps[-n:]
+
+
+def search_episodic_memory(query: str) -> List[Dict[str, Any]]:
+    query_l = query.lower()
+    return [ep for ep in STATE.get("episodes", []) if query_l in ep.get("content", "").lower()]
         if country["country"].lower() == country_name.lower():
             return country
     return {"error": f"Country '{country_name}' not found"}
@@ -114,6 +147,9 @@ TOOLS = {
     "compare_countries": compare_countries,
     "get_top_n_countries": get_top_n_countries,
     "summarize_dataset": summarize_dataset,
+    "add_episodic_memory": add_episodic_memory,
+    "get_episodic_memory": get_episodic_memory,
+    "search_episodic_memory": search_episodic_memory,
 }
 
 
@@ -180,22 +216,28 @@ def trim_history(session_state: Dict[str, Any], max_entries: int = 12) -> None:
 
 def make_system_prompt(session_state: Optional[Dict[str, Any]] = None) -> str:
     tool_catalog = get_tool_catalog()
-    tool_names = ", ".join(tool["name"] for tool in tool_catalog)
-    descriptions = "; ".join(f"{tool['name']}: {tool['description']}" for tool in tool_catalog)
     memory_context = ""
     if session_state:
         memory_context = build_memory_context(session_state)
         if memory_context:
             memory_context = f" Session memory: {memory_context}."
 
+    if tool_catalog:
+        tool_names = ", ".join(tool["name"] for tool in tool_catalog)
+        descriptions = "; ".join(f"{tool['name']}: {tool['description']}" for tool in tool_catalog)
+        tools_part = f"Available tools: {tool_names}. Tool descriptions: {descriptions}."
+        use_tools_sentence = "Use the available tools whenever the user asks about countries, winners, goals, or comparisons. "
+    else:
+        tools_part = "No external tools are available."
+        use_tools_sentence = "Answer directly using only internal logic; do not attempt to call external tools. "
+
     return (
         "You are an agentic FIFA World Cup assistant. "
-        "Use the available tools whenever the user asks about countries, winners, goals, or comparisons. "
+        f"{use_tools_sentence}"
         "Keep short-term state across this chat and remember simple user preferences when they are stated. "
-        f"Available tools: {tool_names}. "
-        f"Tool descriptions: {descriptions}."
+        f"{tools_part}"
         f"{memory_context}"
-        "Return valid JSON only with one of these shapes: "
+        " Return valid JSON only with one of these shapes: "
         '{"tool": "tool_name", "arguments": {...}} or {"final_answer": "..."}.'
     )
 
@@ -289,6 +331,12 @@ def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> Any:
         return tool(arguments.get("country_a", ""), arguments.get("country_b", ""))
     if tool_name == "get_top_n_countries":
         return tool(arguments.get("n", 3))
+    if tool_name == "add_episodic_memory":
+        return tool(arguments.get("content", ""), arguments.get("session_id"))
+    if tool_name == "get_episodic_memory":
+        return tool(arguments.get("n", 5))
+    if tool_name == "search_episodic_memory":
+        return tool(arguments.get("query", ""))
     return tool()
 
 
@@ -405,6 +453,15 @@ def handle_prompt(user_prompt: str, session_id: Optional[str] = None) -> Dict[st
 
     session_state.setdefault("history", []).append({"role": "assistant", "content": answer})
     trim_history(session_state)
+
+    # Record an episodic memory entry for this turn
+    try:
+        ep_content = f"User: {user_prompt} -> Assistant: {answer}"
+        add_episodic_memory(ep_content, resolved_session_id)
+    except Exception:
+        # non-fatal if episodic memory fails
+        pass
+
     save_state()
     return {
         "reply": answer,
