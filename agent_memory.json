@@ -79,6 +79,14 @@
       {
         "role": "assistant",
         "content": "Brazil has the most wins with 5 wins."
+      },
+      {
+        "role": "user",
+        "content": "Summarize the dataset"
+      },
+      {
+        "role": "assistant",
+        "content": "There are 10 countries in the dataset. The top wins country is Brazil and the top goals country is Brazil."
       }
     ],
     "facts": []
@@ -89,6 +97,12 @@
       "session_id": "pylance",
       "time": "2026-08-07T05:41:56.213814Z",
       "content": "test episode from pylance"
+    },
+    {
+      "id": "9423e3ea-4101-45dc-8a06-350f996e9da3",
+      "session_id": "d5c0abaa-5890-4bf5-b34b-7728001733a7",
+      "time": "2026-08-07T05:52:09.943754Z",
+      "content": "User: Summarize the dataset -> Assistant: There are 10 countries in the dataset. The top wins country is Brazil and the top goals country is Brazil."
     }
   ]
 }
