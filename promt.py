@@ -7,11 +7,16 @@ from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 COUNTRIES: List[Dict[str, Any]] = [
-    {"country": "Brazil", "wins": 5, "hosts": 2, "goals": 230},
-    {"country": "Germany", "wins": 4, "hosts": 1, "goals": 200},
-    {"country": "Italy", "wins": 4, "hosts": 2, "goals": 180},
-    {"country": "Argentina", "wins": 3, "hosts": 2, "goals": 150},
-    {"country": "France", "wins": 2, "hosts": 2, "goals": 140},
+    {"country": "Brazil", "wins": 5, "hosts": 2, "goals": 237},
+    {"country": "Germany", "wins": 4, "hosts": 1, "goals": 226},
+    {"country": "Italy", "wins": 4, "hosts": 2, "goals": 178},
+    {"country": "Argentina", "wins": 3, "hosts": 2, "goals": 161},
+    {"country": "France", "wins": 2, "hosts": 2, "goals": 145},
+    {"country": "Uruguay", "wins": 2, "hosts": 1, "goals": 110},
+    {"country": "England", "wins": 1, "hosts": 1, "goals": 115},
+    {"country": "Spain", "wins": 1, "hosts": 1, "goals": 123},
+    {"country": "Netherlands", "wins": 0, "hosts": 0, "goals": 120},
+    {"country": "Portugal", "wins": 0, "hosts": 0, "goals": 98},
 ]
 
 MEMORY_FILE = Path(__file__).with_name("agent_memory.json")
@@ -58,6 +63,20 @@ def find_top_country_by_goals() -> Dict[str, Any]:
     return max(COUNTRIES, key=lambda item: item["goals"])
 
 
+def find_top_country_by_hosts() -> Dict[str, Any]:
+    return max(COUNTRIES, key=lambda item: item["hosts"])
+
+
+def get_average_goals() -> Dict[str, Any]:
+    total_goals = sum(item["goals"] for item in COUNTRIES)
+    average_goals = total_goals / len(COUNTRIES) if COUNTRIES else 0
+    return {"average_goals": average_goals}
+
+
+def get_countries_with_min_wins(min_wins: int = 1) -> List[Dict[str, Any]]:
+    return [item for item in COUNTRIES if item["wins"] >= min_wins]
+
+
 def compare_countries(country_a: str, country_b: str) -> Dict[str, Any]:
     a = get_country_stats(country_a)
     b = get_country_stats(country_b)
@@ -89,6 +108,9 @@ TOOLS = {
     "get_country_stats": get_country_stats,
     "find_top_country_by_wins": find_top_country_by_wins,
     "find_top_country_by_goals": find_top_country_by_goals,
+    "find_top_country_by_hosts": find_top_country_by_hosts,
+    "get_average_goals": get_average_goals,
+    "get_countries_with_min_wins": get_countries_with_min_wins,
     "compare_countries": compare_countries,
     "get_top_n_countries": get_top_n_countries,
     "summarize_dataset": summarize_dataset,
@@ -206,6 +228,19 @@ def fallback_plan(user_prompt: str) -> Dict[str, Any]:
     if ("top" in prompt or "most" in prompt) and "goals" in prompt:
         return {"tool": "find_top_country_by_goals", "arguments": {}}
 
+    if ("top" in prompt or "most" in prompt) and "hosts" in prompt:
+        return {"tool": "find_top_country_by_hosts", "arguments": {}}
+
+    if "average" in prompt and "goals" in prompt:
+        return {"tool": "get_average_goals", "arguments": {}}
+
+    if "countries" in prompt and "wins" in prompt and "at least" in prompt:
+        try:
+            min_wins = int([token for token in prompt.split() if token.isdigit()][0])
+        except (IndexError, ValueError):
+            min_wins = 1
+        return {"tool": "get_countries_with_min_wins", "arguments": {"min_wins": min_wins}}
+
     if "top" in prompt and "countries" in prompt:
         try:
             n = int(prompt.split()[-1])
@@ -255,6 +290,15 @@ def format_result(tool_name: str, result: Any) -> str:
             f"Winner by wins: {result['winner_by_wins']['country']}. "
             f"Winner by goals: {result['winner_by_goals']['country']}."
         )
+    if tool_name == "find_top_country_by_hosts":
+        return f"{result['country']} has hosted the World Cup the most times with {result['hosts']} hosts."
+    if tool_name == "get_average_goals":
+        return f"The average goal total in the dataset is {result['average_goals']:.1f}."
+    if tool_name == "get_countries_with_min_wins":
+        if not result:
+            return "No countries in the dataset meet that minimum win threshold."
+        lines = [f"{item['country']} ({item['wins']} wins)" for item in result]
+        return "Countries with at least that many wins: " + ", ".join(lines)
     if tool_name == "get_top_n_countries":
         lines = [f"{idx + 1}. {item['country']} ({item['wins']} wins, {item['goals']} goals)" for idx, item in enumerate(result)]
         return "\n".join(lines)
