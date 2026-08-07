@@ -149,7 +149,7 @@
       <input id="prompt" type="text" placeholder="Type your question here..." />
       <button onclick="sendPrompt()">Send</button>
     </div>
-    <div class="status">Conversation history and session memory are saved locally in this browser.</div>
+    <div class="status" id="status">Conversation history and session memory are saved locally in this browser.</div>
   </div>
 
   <script>
@@ -157,6 +157,7 @@
     const SESSION_STORAGE_KEY = 'fifa-agent-session-v1';
     let messages = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
     let sessionId = localStorage.getItem(SESSION_STORAGE_KEY);
+    let sessionMemory = [];
 
     function renderMessages() {
       const chat = document.getElementById('chat');
@@ -199,6 +200,13 @@
       if (sessionId) {
         localStorage.setItem(SESSION_STORAGE_KEY, sessionId);
       }
+    }
+
+    function renderStatus() {
+      const status = document.getElementById('status');
+      const memoryText = sessionMemory.length ? `Memory facts: ${sessionMemory.join('; ')}` : 'No session memory yet.';
+      const sessionText = sessionId ? `Session ID: ${sessionId}` : 'No active session.';
+      status.textContent = `${sessionText} ${memoryText}`;
     }
 
     function addMessage(role, text) {
@@ -244,6 +252,9 @@
           sessionId = data.session_id;
           saveSession();
         }
+        if (Array.isArray(data.memory)) {
+          sessionMemory = data.memory;
+        }
         messages[pendingIndex] = { role: 'agent', text: data.reply || 'No response.', time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) };
       } catch (err) {
         messages[pendingIndex] = { role: 'agent', text: 'Error connecting to the agent.', time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) };
@@ -251,6 +262,7 @@
 
       saveMessages();
       renderMessages();
+      renderStatus();
     }
 
     document.getElementById('prompt').addEventListener('keydown', function (event) {
@@ -260,6 +272,7 @@
     });
 
     renderMessages();
+    renderStatus();
   </script>
 </body>
 </html>

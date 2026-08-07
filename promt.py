@@ -162,6 +162,12 @@ def build_memory_context(session_state: Dict[str, Any]) -> str:
     return " ".join(memory_lines)
 
 
+def trim_history(session_state: Dict[str, Any], max_entries: int = 12) -> None:
+    history = session_state.setdefault("history", [])
+    if len(history) > max_entries:
+        session_state["history"] = history[-max_entries:]
+
+
 def make_system_prompt(session_state: Optional[Dict[str, Any]] = None) -> str:
     tool_names = ", ".join(TOOLS.keys())
     memory_context = ""
@@ -379,8 +385,14 @@ def handle_prompt(user_prompt: str, session_id: Optional[str] = None) -> Dict[st
                 answer = llm_answer["final_answer"]
 
     session_state.setdefault("history", []).append({"role": "assistant", "content": answer})
+    trim_history(session_state)
     save_state()
-    return {"reply": answer, "session_id": resolved_session_id}
+    return {
+        "reply": answer,
+        "session_id": resolved_session_id,
+        "memory": session_state.get("facts", []),
+        "state": {"history": session_state.get("history", [])},
+    }
 
 
 def run_agent() -> None:

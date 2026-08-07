@@ -19,5 +19,18 @@
       }
     ],
     "facts": []
+  },
+  "6aa64dba-be6f-4d2b-9681-d0ae5d3a2eff": {
+    "history": [
+      {
+        "role": "user",
+        "content": "Compare Brazil and Germany"
+      },
+      {
+        "role": "assistant",
+        "content": "Brazil vs Germany: Brazil has 5 wins and 230 goals; Germany has 4 wins and 200 goals. Winner by wins: Brazil. Winner by goals: Brazil."
+      }
+    ],
+    "facts": []
   }
 }
