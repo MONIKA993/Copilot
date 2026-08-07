@@ -325,7 +325,10 @@ class AgentHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(content)))
             self.end_headers()
-            self.wfile.write(content)
+            try:
+                self.wfile.write(content)
+            except (ConnectionAbortedError, BrokenPipeError):
+                return
         else:
             self.send_response(404)
             self.end_headers()
@@ -348,7 +351,10 @@ class AgentHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(reply)))
         self.end_headers()
-        self.wfile.write(reply)
+        try:
+            self.wfile.write(reply)
+        except (ConnectionAbortedError, BrokenPipeError):
+            return
 
     def log_message(self, format, *args):
         return
