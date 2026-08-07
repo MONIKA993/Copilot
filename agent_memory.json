@@ -1,0 +1,23 @@
+{
+  "3326b3e1-78f3-43f6-8f11-2644780e39a0": {
+    "history": [
+      {
+        "role": "user",
+        "content": "find top country by hosts"
+      },
+      {
+        "role": "assistant",
+        "content": "I can help you compare teams, find the leader in wins or goals, or summarize the dataset. Try asking: 'Which country has the most wins?'"
+      },
+      {
+        "role": "user",
+        "content": "which country has the most wins"
+      },
+      {
+        "role": "assistant",
+        "content": "Brazil has the most wins with 5 wins."
+      }
+    ],
+    "facts": []
+  }
+}
