@@ -82,5 +82,13 @@
       }
     ],
     "facts": []
-  }
+  },
+  "episodes": [
+    {
+      "id": "6f0c1e88-27db-47b9-85d5-d9d62c6d7e4a",
+      "session_id": "pylance",
+      "time": "2026-08-07T05:41:56.213814Z",
+      "content": "test episode from pylance"
+    }
+  ]
 }
