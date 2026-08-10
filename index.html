@@ -125,6 +125,52 @@
       color: #64748b;
       margin-top: 8px;
     }
+    .agent-panel {
+      margin: 12px 0 16px;
+      padding: 12px 14px;
+      border: 1px solid #dbeafe;
+      border-radius: 12px;
+      background: #f8fbff;
+    }
+    .panel-title {
+      font-weight: 700;
+      color: #1d4ed8;
+      margin-bottom: 6px;
+    }
+    .panel-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: #eff6ff;
+      color: #1d4ed8;
+      font-size: 0.9rem;
+    }
+    .timeline {
+      margin-top: 12px;
+      display: grid;
+      gap: 8px;
+    }
+    .timeline-item {
+      padding: 10px 12px;
+      border-radius: 10px;
+      background: white;
+      border: 1px solid #e2e8f0;
+      font-size: 0.95rem;
+    }
+    .timeline-item small {
+      display: block;
+      color: #64748b;
+      margin-top: 4px;
+      font-size: 0.8rem;
+    }
     /* Tool list UI removed — agent responds directly without exposing tools */
   </style>
 </head>
@@ -144,6 +190,13 @@
       <span class="chip" onclick="fillPrompt('Summarize the dataset')">Summarize dataset</span>
     </div>
 
+    <div id="agent-panel" class="agent-panel">
+      <div class="panel-title">Agent activity</div>
+      <div id="agent-plan">Ready to help with the next task.</div>
+      <div id="agent-meta" class="panel-row"></div>
+      <div id="memory-timeline" class="timeline"></div>
+    </div>
+
     <div id="chat"></div>
 
     <div class="composer">
@@ -159,6 +212,7 @@
     let messages = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
     let sessionId = localStorage.getItem(SESSION_STORAGE_KEY);
     let sessionMemory = [];
+    let agentState = null;
 
     function renderMessages() {
       const chat = document.getElementById('chat');
@@ -210,6 +264,22 @@
       status.textContent = `${sessionText} ${memoryText}`;
     }
 
+    function renderAgentPanel() {
+      const planEl = document.getElementById('agent-plan');
+      const metaEl = document.getElementById('agent-meta');
+      const planText = agentState?.plan || 'Ready to help with the next task.';
+      const toolText = agentState?.tool_used ? `Tool: ${agentState.tool_used}` : 'Tool: direct answer';
+      const memoryFacts = agentState?.memory_facts?.length ? agentState.memory_facts.join(', ') : 'No stored preferences yet';
+      const memoryStats = `${agentState?.semantic_count || 0} semantic / ${agentState?.episodic_count || 0} episodic memories`;
+
+      planEl.textContent = planText;
+      metaEl.innerHTML = `
+        <span class="pill">${toolText}</span>
+        <span class="pill">Memory: ${memoryFacts}</span>
+        <span class="pill">${memoryStats}</span>
+      `;
+    }
+
     // Tool list rendering removed — agent UI will not show available tools
 
     function addMessage(role, text) {
@@ -229,6 +299,27 @@
       localStorage.removeItem(SESSION_STORAGE_KEY);
       sessionId = null;
       renderMessages();
+    }
+
+    async function loadMemoryTimeline() {
+      try {
+        const response = await fetch('/memory/timeline');
+        const data = await response.json();
+        const container = document.getElementById('memory-timeline');
+        const items = Array.isArray(data.timeline) ? data.timeline : [];
+        if (!items.length) {
+          container.innerHTML = '<div class="timeline-item">No memory events recorded yet.</div>';
+          return;
+        }
+        container.innerHTML = items.map((item) => `
+          <div class="timeline-item">
+            <strong>${item.type === 'semantic' ? 'Semantic' : 'Episodic'}</strong>: ${item.content}
+            <small>${item.topic || 'memory'} • ${item.time || 'unknown time'}</small>
+          </div>
+        `).join('');
+      } catch (err) {
+        document.getElementById('memory-timeline').innerHTML = '<div class="timeline-item">Unable to load memory timeline.</div>';
+      }
     }
 
     async function sendPrompt() {
@@ -258,6 +349,11 @@
         if (Array.isArray(data.memory)) {
           sessionMemory = data.memory;
         }
+        if (data.agent_state) {
+          agentState = data.agent_state;
+        }
+        renderAgentPanel();
+        await loadMemoryTimeline();
         // `data.tools` is intentionally ignored; UI does not expose internal tools.
         messages[pendingIndex] = { role: 'agent', text: data.reply || 'No response.', time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) };
       } catch (err) {
@@ -277,6 +373,8 @@
 
     renderMessages();
     renderStatus();
+    renderAgentPanel();
+    loadMemoryTimeline();
   </script>
 </body>
 </html>

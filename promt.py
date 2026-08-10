@@ -389,6 +389,27 @@ def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> Any:
     return tool()
 
 
+def build_agent_state(user_prompt: str, plan: Dict[str, Any], tool_name: Optional[str], session_state: Dict[str, Any]) -> Dict[str, Any]:
+    prompt = (user_prompt or "").strip()
+    lower_prompt = prompt.lower()
+
+    if "remember" in lower_prompt or "i prefer" in lower_prompt or "my name is" in lower_prompt:
+        plan_summary = "Store the user preference or fact in memory."
+    elif tool_name:
+        plan_summary = f"Use the {tool_name} tool to answer the request."
+    else:
+        plan_summary = "Answer directly without tool use."
+
+    facts = session_state.get("facts", [])
+    return {
+        "plan": plan_summary,
+        "tool_used": tool_name,
+        "memory_facts": facts[-3:],
+        "episodic_count": len(STATE.get("episodes", [])),
+        "semantic_count": len(STATE.get("semantic_memories", [])),
+    }
+
+
 def format_result(tool_name: str, result: Any) -> str:
     if isinstance(result, dict) and "error" in result:
         return result["error"]
@@ -462,6 +483,22 @@ class AgentHandler(BaseHTTPRequestHandler):
             q = qs.get("q", [""])[0]
             results = search_episodic_memory(q) if q else []
             payload = json.dumps({"results": results}).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            try:
+                self.wfile.write(payload)
+            except (ConnectionAbortedError, BrokenPipeError):
+                return
+        elif parsed.path == "/memory/timeline":
+            timeline = []
+            for memory in STATE.get("semantic_memories", [])[-8:]:
+                timeline.append({"type": "semantic", "content": memory.get("content", ""), "topic": memory.get("topic", "general"), "time": memory.get("time", "")})
+            for episode in STATE.get("episodes", [])[-8:]:
+                timeline.append({"type": "episodic", "content": episode.get("content", ""), "topic": "episode", "time": episode.get("time", "")})
+            timeline.sort(key=lambda item: item.get("time", ""), reverse=True)
+            payload = json.dumps({"timeline": timeline[:8]}).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(payload)))
@@ -558,6 +595,8 @@ def handle_prompt(user_prompt: str, session_id: Optional[str] = None) -> Dict[st
     session_state.setdefault("history", []).append({"role": "assistant", "content": answer})
     trim_history(session_state)
 
+    agent_state = build_agent_state(user_prompt, plan, tool_name, session_state)
+
     # Record a semantic memory entry for notable turns.
     try:
         if tool_name in {"find_top_country_by_wins", "find_top_country_by_goals", "find_top_country_by_hosts", "compare_countries", "summarize_dataset", "get_country_stats"}:
@@ -580,6 +619,7 @@ def handle_prompt(user_prompt: str, session_id: Optional[str] = None) -> Dict[st
         "memory": session_state.get("facts", []),
         "state": {"history": session_state.get("history", [])},
         "tools": get_tool_catalog(),
+        "agent_state": agent_state,
     }
 
 
