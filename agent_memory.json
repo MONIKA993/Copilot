@@ -103,6 +103,139 @@
       "session_id": "d5c0abaa-5890-4bf5-b34b-7728001733a7",
       "time": "2026-08-07T05:52:09.943754Z",
       "content": "User: Summarize the dataset -> Assistant: There are 10 countries in the dataset. The top wins country is Brazil and the top goals country is Brazil."
+    },
+    {
+      "id": "c9e0873b-8bc8-4450-ae32-64631a9db43a",
+      "session_id": "semtest",
+      "time": "2026-08-10T05:10:58.057308Z",
+      "content": "User: remember I prefer Brazil -> Assistant: I can help you compare teams, find the leader in wins or goals, or summarize the dataset. Try asking: 'Which country has the most wins?'"
+    },
+    {
+      "id": "068f421d-efdd-4e50-9ec3-cef14ecb8f56",
+      "session_id": "semtest",
+      "time": "2026-08-10T05:12:22.400889Z",
+      "content": "User: which country has the most wins? -> Assistant: Brazil has the most wins with 5 wins."
+    },
+    {
+      "id": "ffc49bad-f97d-47ca-8d6f-23fff10042f7",
+      "session_id": "semtest2",
+      "time": "2026-08-10T05:17:32.431723Z",
+      "content": "User: remember I prefer Brazil -> Assistant: I can help you compare teams, find the leader in wins or goals, or summarize the dataset. Try asking: 'Which country has the most wins?'"
+    },
+    {
+      "id": "6ef538ed-7c36-4a3a-8a96-e11180258ceb",
+      "session_id": "4771f536-0b40-425f-8b3a-1ba217331f46",
+      "time": "2026-08-10T05:21:27.154814Z",
+      "content": "User: Which country has the most wins? -> Assistant: Brazil has the most wins with 5 wins."
+    },
+    {
+      "id": "0fbf240c-0dcd-4b58-ad0d-b1d1ad95a2fe",
+      "session_id": "4771f536-0b40-425f-8b3a-1ba217331f46",
+      "time": "2026-08-10T05:21:35.433521Z",
+      "content": "User: Compare Brazil and Germany -> Assistant: Brazil vs Germany: Brazil has 5 wins and 237 goals; Germany has 4 wins and 226 goals. Winner by wins: Brazil. Winner by goals: Brazil."
+    },
+    {
+      "id": "627ecfb9-23c8-419e-b07d-802dc288052c",
+      "session_id": "4771f536-0b40-425f-8b3a-1ba217331f46",
+      "time": "2026-08-10T05:21:55.046718Z",
+      "content": "User: Summarize the dataset -> Assistant: There are 10 countries in the dataset. The top wins country is Brazil and the top goals country is Brazil."
     }
-  ]
+  ],
+  "semtest": {
+    "history": [
+      {
+        "role": "user",
+        "content": "remember I prefer Brazil"
+      },
+      {
+        "role": "assistant",
+        "content": "I can help you compare teams, find the leader in wins or goals, or summarize the dataset. Try asking: 'Which country has the most wins?'"
+      },
+      {
+        "role": "user",
+        "content": "which country has the most wins?"
+      },
+      {
+        "role": "assistant",
+        "content": "Brazil has the most wins with 5 wins."
+      }
+    ],
+    "facts": [
+      "I prefer Brazil"
+    ]
+  },
+  "semantic_memories": [
+    {
+      "id": "fd226491-b924-425b-93a1-abb7a8b1f9df",
+      "session_id": "semtest2",
+      "topic": "user_preference",
+      "time": "2026-08-10T05:17:32.429003Z",
+      "content": "I prefer Brazil"
+    },
+    {
+      "id": "347b6518-78c2-41ee-b3df-0bf31130513a",
+      "session_id": "4771f536-0b40-425f-8b3a-1ba217331f46",
+      "topic": "dataset_fact",
+      "time": "2026-08-10T05:21:27.146356Z",
+      "content": "User asked: Which country has the most wins? -> Answer: Brazil has the most wins with 5 wins."
+    },
+    {
+      "id": "c499071d-d1fe-47a4-9de5-f9fdfe129143",
+      "session_id": "4771f536-0b40-425f-8b3a-1ba217331f46",
+      "topic": "dataset_fact",
+      "time": "2026-08-10T05:21:35.423200Z",
+      "content": "User asked: Compare Brazil and Germany -> Answer: Brazil vs Germany: Brazil has 5 wins and 237 goals; Germany has 4 wins and 226 goals. Winner by wins: Brazil. Winner by goals: Brazil."
+    },
+    {
+      "id": "3db0f7af-6bd6-4d26-976d-ab9995f06f5d",
+      "session_id": "4771f536-0b40-425f-8b3a-1ba217331f46",
+      "topic": "dataset_fact",
+      "time": "2026-08-10T05:21:55.028133Z",
+      "content": "User asked: Summarize the dataset -> Answer: There are 10 countries in the dataset. The top wins country is Brazil and the top goals country is Brazil."
+    }
+  ],
+  "semtest2": {
+    "history": [
+      {
+        "role": "user",
+        "content": "remember I prefer Brazil"
+      },
+      {
+        "role": "assistant",
+        "content": "I can help you compare teams, find the leader in wins or goals, or summarize the dataset. Try asking: 'Which country has the most wins?'"
+      }
+    ],
+    "facts": [
+      "I prefer Brazil"
+    ]
+  },
+  "4771f536-0b40-425f-8b3a-1ba217331f46": {
+    "history": [
+      {
+        "role": "user",
+        "content": "Which country has the most wins?"
+      },
+      {
+        "role": "assistant",
+        "content": "Brazil has the most wins with 5 wins."
+      },
+      {
+        "role": "user",
+        "content": "Compare Brazil and Germany"
+      },
+      {
+        "role": "assistant",
+        "content": "Brazil vs Germany: Brazil has 5 wins and 237 goals; Germany has 4 wins and 226 goals. Winner by wins: Brazil. Winner by goals: Brazil."
+      },
+      {
+        "role": "user",
+        "content": "Summarize the dataset"
+      },
+      {
+        "role": "assistant",
+        "content": "There are 10 countries in the dataset. The top wins country is Brazil and the top goals country is Brazil."
+      }
+    ],
+    "facts": []
+  }
 }

@@ -38,9 +38,10 @@ def load_state() -> None:
     else:
         STATE = {}
 
-    # ensure episodic container
-    if isinstance(STATE, dict) and "episodes" not in STATE:
+    # ensure memory containers
+    if isinstance(STATE, dict):
         STATE.setdefault("episodes", [])
+        STATE.setdefault("semantic_memories", [])
 
 
 def save_state() -> None:
@@ -134,6 +135,30 @@ def search_episodic_memory(query: str) -> List[Dict[str, Any]]:
     return [ep for ep in STATE.get("episodes", []) if q in ep.get("content", "").lower()]
 
 
+# --- Semantic memory helpers ---
+def add_semantic_memory(content: str, topic: Optional[str] = None, session_id: Optional[str] = None) -> Dict[str, Any]:
+    entry = {
+        "id": str(uuid4()),
+        "session_id": session_id,
+        "topic": topic or "general",
+        "time": datetime.utcnow().isoformat() + "Z",
+        "content": content,
+    }
+    STATE.setdefault("semantic_memories", []).append(entry)
+    save_state()
+    return entry
+
+
+def get_semantic_memory(n: int = 5) -> List[Dict[str, Any]]:
+    memories = STATE.get("semantic_memories", [])
+    return memories[-n:]
+
+
+def search_semantic_memory(query: str) -> List[Dict[str, Any]]:
+    q = query.lower()
+    return [memory for memory in STATE.get("semantic_memories", []) if q in memory.get("content", "").lower() or q in memory.get("topic", "").lower()]
+
+
 # --- Tool registry ---
 TOOLS = {
     "get_country_data": get_country_data,
@@ -149,6 +174,9 @@ TOOLS = {
     "add_episodic_memory": add_episodic_memory,
     "get_episodic_memory": get_episodic_memory,
     "search_episodic_memory": search_episodic_memory,
+    "add_semantic_memory": add_semantic_memory,
+    "get_semantic_memory": get_semantic_memory,
+    "search_semantic_memory": search_semantic_memory,
 }
 
 
@@ -166,24 +194,27 @@ def ensure_session(session_id: str) -> Dict[str, Any]:
     return STATE[session_id]
 
 
-def update_memory(session_state: Dict[str, Any], user_prompt: str) -> None:
+def update_memory(session_state: Dict[str, Any], user_prompt: str, session_id: Optional[str] = None) -> None:
     prompt = user_prompt.strip()
     if not prompt:
         return
 
     lower_prompt = prompt.lower()
+    fact = None
     if "remember" in lower_prompt:
         fact = prompt.split("remember", 1)[1].strip().strip(".?!")
-        if fact and fact not in session_state.get("facts", []):
-            session_state.setdefault("facts", []).append(fact)
     elif "i prefer" in lower_prompt:
         fact = prompt.strip().rstrip(".?!")
-        if fact and fact not in session_state.get("facts", []):
-            session_state.setdefault("facts", []).append(fact)
     elif "my name is" in lower_prompt:
         fact = prompt.strip().rstrip(".?!")
-        if fact and fact not in session_state.get("facts", []):
+
+    if fact:
+        if fact not in session_state.get("facts", []):
             session_state.setdefault("facts", []).append(fact)
+        try:
+            add_semantic_memory(fact, topic="user_preference", session_id=session_id)
+        except Exception:
+            pass
 
     history = session_state.setdefault("history", [])
     if len(history) > 12:
@@ -208,6 +239,13 @@ def build_memory_context(session_state: Dict[str, Any]) -> str:
         last_eps = episodes[-3:]
         ep_lines = [f"{ep.get('time','')}: {ep.get('content','')}" for ep in last_eps]
         memory_lines.append("Recent episodes: " + " | ".join(ep_lines))
+
+    # Include recent semantic memory (global)
+    semantic_memories = STATE.get("semantic_memories", [])
+    if semantic_memories:
+        last_semantics = semantic_memories[-3:]
+        sem_lines = [f"{memory.get('topic','general')}: {memory.get('content','')}" for memory in last_semantics]
+        memory_lines.append("Semantic memory: " + " | ".join(sem_lines))
 
     return " ".join(memory_lines)
 
@@ -341,6 +379,12 @@ def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> Any:
     if tool_name == "get_episodic_memory":
         return tool(arguments.get("n", 5))
     if tool_name == "search_episodic_memory":
+        return tool(arguments.get("query", ""))
+    if tool_name == "add_semantic_memory":
+        return tool(arguments.get("content", ""), arguments.get("topic"), arguments.get("session_id"))
+    if tool_name == "get_semantic_memory":
+        return tool(arguments.get("n", 5))
+    if tool_name == "search_semantic_memory":
         return tool(arguments.get("query", ""))
     return tool()
 
@@ -484,13 +528,14 @@ def handle_prompt(user_prompt: str, session_id: Optional[str] = None) -> Dict[st
     resolved_session_id = session_id or str(uuid4())
     session_state = ensure_session(resolved_session_id)
     session_state.setdefault("history", []).append({"role": "user", "content": user_prompt})
-    update_memory(session_state, user_prompt)
+    update_memory(session_state, user_prompt, resolved_session_id)
 
     system_prompt = make_system_prompt(session_state)
     plan = call_llm(system_prompt, user_prompt)
     if not plan:
         plan = fallback_plan(user_prompt)
 
+    tool_name: Optional[str] = None
     if "final_answer" in plan:
         answer = plan["final_answer"]
     else:
@@ -512,6 +557,13 @@ def handle_prompt(user_prompt: str, session_id: Optional[str] = None) -> Dict[st
 
     session_state.setdefault("history", []).append({"role": "assistant", "content": answer})
     trim_history(session_state)
+
+    # Record a semantic memory entry for notable turns.
+    try:
+        if tool_name in {"find_top_country_by_wins", "find_top_country_by_goals", "find_top_country_by_hosts", "compare_countries", "summarize_dataset", "get_country_stats"}:
+            add_semantic_memory(f"User asked: {user_prompt} -> Answer: {answer}", topic="dataset_fact", session_id=resolved_session_id)
+    except Exception:
+        pass
 
     # Record an episodic memory entry for this turn
     try:
