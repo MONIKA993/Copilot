@@ -561,66 +561,239 @@ class AgentHandler(BaseHTTPRequestHandler):
         return
 
 
-def handle_prompt(user_prompt: str, session_id: Optional[str] = None) -> Dict[str, Any]:
-    resolved_session_id = session_id or str(uuid4())
-    session_state = ensure_session(resolved_session_id)
+# ---------------------------------------------------------------------------
+# State graph engine
+#
+# A minimal, dependency-free state graph: a set of named nodes (plain
+# functions that take the shared state dict and return it, mutated), wired
+# together with static edges (node -> node) and conditional edges
+# (node -> router function -> node name). `compile()` returns a Graph whose
+# `invoke(state)` walks nodes until it reaches END, so the whole request
+# pipeline is an explicit, inspectable graph instead of one long function.
+# ---------------------------------------------------------------------------
+
+END = "__END__"
+
+
+class StateGraph:
+    def __init__(self) -> None:
+        self._nodes: Dict[str, Any] = {}
+        self._edges: Dict[str, str] = {}
+        self._conditional_edges: Dict[str, Any] = {}
+        self._entry_point: Optional[str] = None
+
+    def add_node(self, name: str, fn: Any) -> "StateGraph":
+        self._nodes[name] = fn
+        return self
+
+    def set_entry_point(self, name: str) -> "StateGraph":
+        self._entry_point = name
+        return self
+
+    def add_edge(self, from_node: str, to_node: str) -> "StateGraph":
+        self._edges[from_node] = to_node
+        return self
+
+    def add_conditional_edges(self, from_node: str, router: Any) -> "StateGraph":
+        # router(state) -> next node name (or END)
+        self._conditional_edges[from_node] = router
+        return self
+
+    def compile(self) -> "CompiledGraph":
+        if self._entry_point is None:
+            raise ValueError("StateGraph has no entry point set")
+        return CompiledGraph(self._nodes, self._edges, self._conditional_edges, self._entry_point)
+
+
+class CompiledGraph:
+    def __init__(self, nodes, edges, conditional_edges, entry_point) -> None:
+        self._nodes = nodes
+        self._edges = edges
+        self._conditional_edges = conditional_edges
+        self._entry_point = entry_point
+
+    def invoke(self, state: Dict[str, Any], max_steps: int = 50) -> Dict[str, Any]:
+        current = self._entry_point
+        trace: List[str] = []
+        steps = 0
+        while current != END:
+            if steps >= max_steps:
+                raise RuntimeError(f"State graph exceeded {max_steps} steps (possible cycle): {trace}")
+            if current not in self._nodes:
+                raise ValueError(f"Unknown node '{current}'")
+            trace.append(current)
+            state = self._nodes[current](state) or state
+            if current in self._conditional_edges:
+                current = self._conditional_edges[current](state)
+            elif current in self._edges:
+                current = self._edges[current]
+            else:
+                current = END
+            steps += 1
+        state["_graph_trace"] = trace
+        return state
+
+
+# ---------------------------------------------------------------------------
+# Node implementations — each corresponds to one box in the agent's
+# published state graph diagram (receive prompt -> update memory ->
+# build system prompt -> plan (llm/fallback) -> execute tool -> format
+# answer -> record memory -> save & respond).
+# ---------------------------------------------------------------------------
+
+def node_update_memory(state: Dict[str, Any]) -> Dict[str, Any]:
+    session_state = state["session_state"]
+    user_prompt = state["user_prompt"]
     session_state.setdefault("history", []).append({"role": "user", "content": user_prompt})
-    update_memory(session_state, user_prompt, resolved_session_id)
+    update_memory(session_state, user_prompt, state["session_id"])
+    return state
 
-    system_prompt = make_system_prompt(session_state)
-    plan = call_llm(system_prompt, user_prompt)
-    if not plan:
-        plan = fallback_plan(user_prompt)
 
-    tool_name: Optional[str] = None
+def node_build_system_prompt(state: Dict[str, Any]) -> Dict[str, Any]:
+    state["system_prompt"] = make_system_prompt(state["session_state"])
+    return state
+
+
+def node_plan_llm(state: Dict[str, Any]) -> Dict[str, Any]:
+    plan = call_llm(state["system_prompt"], state["user_prompt"])
+    state["plan"] = plan
+    state["planner_used"] = "llm" if plan else None
+    return state
+
+
+def node_plan_fallback(state: Dict[str, Any]) -> Dict[str, Any]:
+    state["plan"] = fallback_plan(state["user_prompt"])
+    state["planner_used"] = "fallback"
+    return state
+
+
+def route_after_llm_plan(state: Dict[str, Any]) -> str:
+    if not state.get("plan"):
+        return "plan_fallback"
+    return route_after_plan(state)
+
+
+def route_after_plan(state: Dict[str, Any]) -> str:
+    plan = state.get("plan") or {}
+    return "format_answer" if "final_answer" in plan else "execute_tool"
+
+
+def node_execute_tool(state: Dict[str, Any]) -> Dict[str, Any]:
+    plan = state["plan"]
+    tool_name = plan.get("tool")
+    arguments = plan.get("arguments", {})
+    state["tool_name"] = tool_name
+    state["result"] = execute_tool(tool_name, arguments)
+    return state
+
+
+def node_format_answer(state: Dict[str, Any]) -> Dict[str, Any]:
+    plan = state["plan"]
     if "final_answer" in plan:
-        answer = plan["final_answer"]
-    else:
-        tool_name = plan.get("tool")
-        arguments = plan.get("arguments", {})
-        result = execute_tool(tool_name, arguments)
-        answer = format_result(tool_name, result)
+        state["answer"] = plan["final_answer"]
+        return state
 
-        if os.getenv("OPENAI_API_KEY"):
-            final_prompt = (
-                f"The user asked: {user_prompt}\n"
-                f"The tool used was: {tool_name}\n"
-                f"The tool result was: {json.dumps(result, ensure_ascii=False)}\n"
-                "Write a short, natural-language answer."
-            )
-            llm_answer = call_llm(system_prompt, final_prompt)
-            if llm_answer and "final_answer" in llm_answer:
-                answer = llm_answer["final_answer"]
+    tool_name = state.get("tool_name")
+    result = state.get("result")
+    answer = format_result(tool_name, result)
 
-    session_state.setdefault("history", []).append({"role": "assistant", "content": answer})
+    if os.getenv("OPENAI_API_KEY"):
+        final_prompt = (
+            f"The user asked: {state['user_prompt']}\n"
+            f"The tool used was: {tool_name}\n"
+            f"The tool result was: {json.dumps(result, ensure_ascii=False)}\n"
+            "Write a short, natural-language answer."
+        )
+        llm_answer = call_llm(state["system_prompt"], final_prompt)
+        if llm_answer and "final_answer" in llm_answer:
+            answer = llm_answer["final_answer"]
+
+    state["answer"] = answer
+    return state
+
+
+def node_finalize_history(state: Dict[str, Any]) -> Dict[str, Any]:
+    session_state = state["session_state"]
+    session_state.setdefault("history", []).append({"role": "assistant", "content": state["answer"]})
     trim_history(session_state)
+    state["agent_state"] = build_agent_state(state["user_prompt"], state["plan"], state.get("tool_name"), session_state)
+    return state
 
-    agent_state = build_agent_state(user_prompt, plan, tool_name, session_state)
 
-    # Record a semantic memory entry for notable turns.
+DATASET_TOOLS = {
+    "find_top_country_by_wins", "find_top_country_by_goals", "find_top_country_by_hosts",
+    "compare_countries", "summarize_dataset", "get_country_stats",
+}
+
+
+def node_record_memory(state: Dict[str, Any]) -> Dict[str, Any]:
+    user_prompt, answer, session_id = state["user_prompt"], state["answer"], state["session_id"]
     try:
-        if tool_name in {"find_top_country_by_wins", "find_top_country_by_goals", "find_top_country_by_hosts", "compare_countries", "summarize_dataset", "get_country_stats"}:
-            add_semantic_memory(f"User asked: {user_prompt} -> Answer: {answer}", topic="dataset_fact", session_id=resolved_session_id)
+        if state.get("tool_name") in DATASET_TOOLS:
+            add_semantic_memory(f"User asked: {user_prompt} -> Answer: {answer}", topic="dataset_fact", session_id=session_id)
     except Exception:
         pass
-
-    # Record an episodic memory entry for this turn
     try:
-        ep_content = f"User: {user_prompt} -> Assistant: {answer}"
-        add_episodic_memory(ep_content, resolved_session_id)
+        add_episodic_memory(f"User: {user_prompt} -> Assistant: {answer}", session_id)
     except Exception:
-        # non-fatal if episodic memory fails
         pass
+    return state
 
+
+def node_save_and_respond(state: Dict[str, Any]) -> Dict[str, Any]:
     save_state()
-    return {
-        "reply": answer,
-        "session_id": resolved_session_id,
+    session_state = state["session_state"]
+    state["response"] = {
+        "reply": state["answer"],
+        "session_id": state["session_id"],
         "memory": session_state.get("facts", []),
         "state": {"history": session_state.get("history", [])},
         "tools": get_tool_catalog(),
-        "agent_state": agent_state,
+        "agent_state": state["agent_state"],
     }
+    return state
+
+
+def build_agent_graph() -> CompiledGraph:
+    graph = StateGraph()
+    graph.add_node("update_memory", node_update_memory)
+    graph.add_node("build_system_prompt", node_build_system_prompt)
+    graph.add_node("plan_llm", node_plan_llm)
+    graph.add_node("plan_fallback", node_plan_fallback)
+    graph.add_node("execute_tool", node_execute_tool)
+    graph.add_node("format_answer", node_format_answer)
+    graph.add_node("finalize_history", node_finalize_history)
+    graph.add_node("record_memory", node_record_memory)
+    graph.add_node("save_and_respond", node_save_and_respond)
+
+    graph.set_entry_point("update_memory")
+    graph.add_edge("update_memory", "build_system_prompt")
+    graph.add_edge("build_system_prompt", "plan_llm")
+    graph.add_conditional_edges("plan_llm", route_after_llm_plan)
+    graph.add_conditional_edges("plan_fallback", route_after_plan)
+    graph.add_edge("execute_tool", "format_answer")
+    graph.add_edge("format_answer", "finalize_history")
+    graph.add_edge("finalize_history", "record_memory")
+    graph.add_edge("record_memory", "save_and_respond")
+    graph.add_edge("save_and_respond", END)
+
+    return graph.compile()
+
+
+AGENT_GRAPH = build_agent_graph()
+
+
+def handle_prompt(user_prompt: str, session_id: Optional[str] = None) -> Dict[str, Any]:
+    resolved_session_id = session_id or str(uuid4())
+    session_state = ensure_session(resolved_session_id)
+
+    initial_state: Dict[str, Any] = {
+        "user_prompt": user_prompt,
+        "session_id": resolved_session_id,
+        "session_state": session_state,
+    }
+    final_state = AGENT_GRAPH.invoke(initial_state)
+    return final_state["response"]
 
 
 def run_agent() -> None:

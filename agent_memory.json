@@ -199,6 +199,12 @@
       "session_id": "acc38153-79bf-41e9-a469-4ecd1edaaf0c",
       "time": "2026-08-11T04:36:49.988928Z",
       "content": "User: Summarize the dataset -> Assistant: There are 10 countries in the dataset. The top wins country is Brazil and the top goals country is Brazil."
+    },
+    {
+      "id": "9a6b205f-ed94-496c-b602-baed1532e979",
+      "session_id": "acc38153-79bf-41e9-a469-4ecd1edaaf0c",
+      "time": "2026-08-14T04:39:00.461169Z",
+      "content": "User: hi -> Assistant: I can help you compare teams, find the leader in wins or goals, or summarize the dataset. Try asking: 'Which country has the most wins?'"
     }
   ],
   "semtest": {
@@ -464,6 +470,14 @@
       {
         "role": "assistant",
         "content": "There are 10 countries in the dataset. The top wins country is Brazil and the top goals country is Brazil."
+      },
+      {
+        "role": "user",
+        "content": "hi"
+      },
+      {
+        "role": "assistant",
+        "content": "I can help you compare teams, find the leader in wins or goals, or summarize the dataset. Try asking: 'Which country has the most wins?'"
       }
     ],
     "facts": []
