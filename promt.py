@@ -570,6 +570,88 @@ class AgentHandler(BaseHTTPRequestHandler):
 # (node -> router function -> node name). `compile()` returns a Graph whose
 # `invoke(state)` walks nodes until it reaches END, so the whole request
 # pipeline is an explicit, inspectable graph instead of one long function.
+#
+#                        ┌─────────────┐
+#                        │    START    │
+#                        └──────┬──────┘
+#                               ↓
+#                        ┌─────────────┐
+#                        │   INTAKE    │
+#                        │update_memory│
+#                        │extract facts│
+#                        └──────┬──────┘
+#                               ↓
+#                        ┌─────────────┐
+#                        │BUILD_CONTEXT│
+#                        │system prompt│
+#                        │ + memory    │
+#                        └──────┬──────┘
+#                               ↓
+#                        ┌─────────────┐
+#                        │  PLAN_LLM   │
+#                        │ call OpenAI │
+#                        └──────┬──────┘
+#                               │
+#                        Plan returned?
+#                          /        \
+#                        NO         YES
+#                         ↓           │
+#                  ┌─────────────┐    │
+#                  │PLAN_FALLBACK│    │
+#                  │keyword match│    │
+#                  └──────┬──────┘    │
+#                         └─────┬─────┘
+#                               ↓
+#                     Final answer or tool call?
+#                        /                  \
+#                 FINAL_ANSWER             TOOL
+#                       │                    ↓
+#                       │             ┌─────────────┐
+#                       │             │EXECUTE_TOOL │
+#                       │             └──────┬──────┘
+#                       │                    │
+#                       │             Tools available:
+#                       │             • find_top_country_by_wins()
+#                       │             • find_top_country_by_goals()
+#                       │             • compare_countries()
+#                       │             • summarize_dataset()
+#                       │             • get_country_stats()
+#                       │                    │
+#                       └─────────┬──────────┘
+#                                 ↓
+#                          ┌─────────────┐
+#                          │FORMAT_ANSWER│
+#                          │optional LLM │
+#                          │  rewrite    │
+#                          └──────┬──────┘
+#                                 ↓
+#                          ┌─────────────┐
+#                          │FINALIZE_HIST│
+#                          │trim + build │
+#                          │agent_state  │
+#                          └──────┬──────┘
+#                                 ↓
+#                          ┌─────────────┐
+#                          │RECORD_MEMORY│
+#                          └──────┬──────┘
+#                                 │
+#                          Tools available:
+#                          • add_episodic_memory()
+#                          • add_semantic_memory()
+#                                 │
+#                                 ↓
+#                          ┌─────────────┐
+#                          │SAVE_AND_RESP│
+#                          │save_state() │
+#                          └──────┬──────┘
+#                                 ↓
+#                               END
+#
+# Note: unlike a support-ticket-style graph, there is no human-approval /
+# high-risk escalation branch here — every turn runs straight through to
+# SAVE_AND_RESPOND. If you want a REVIEW/ESCALATE gate (e.g. before a tool
+# call that mutates data), add a node + conditional edge the same way
+# plan_llm -> plan_fallback is wired below.
 # ---------------------------------------------------------------------------
 
 END = "__END__"
@@ -635,80 +717,186 @@ class CompiledGraph:
 
 
 # ---------------------------------------------------------------------------
-# Node implementations — each corresponds to one box in the agent's
-# published state graph diagram (receive prompt -> update memory ->
-# build system prompt -> plan (llm/fallback) -> execute tool -> format
-# answer -> record memory -> save & respond).
+# Multi-agent implementation — supervisor pattern.
+#
+# Instead of one planner deciding both "which tool" and "how to answer", a
+# Supervisor agent decides, turn by turn, which specialist should act next:
+# the Dataset agent (FIFA World Cup stats) or the Memory agent (storing and
+# recalling facts about the user). Each specialist owns its own scoped
+# system prompt and its own tool set. The supervisor loops — after each
+# dispatch it re-evaluates whether more work is needed — until it decides
+# the turn is done, at which point a final answer is assembled from
+# whatever the specialists produced.
+#
+#   update_memory -> supervisor_decide -+-> dispatch_dataset -+
+#                           ^            |                    |
+#                           |            +-> dispatch_memory -+
+#                           +--------------------(loop back)--+
+#                           |
+#                           +-> finalize_answer -> finalize_history
+#                               -> record_memory -> save_and_respond
 # ---------------------------------------------------------------------------
+
+MAX_SUPERVISOR_HOPS = 4
+
+DATASET_TOOL_NAMES = {
+    "get_country_data", "get_country_stats", "find_top_country_by_wins",
+    "find_top_country_by_goals", "find_top_country_by_hosts", "get_average_goals",
+    "get_countries_with_min_wins", "compare_countries", "get_top_n_countries",
+    "summarize_dataset",
+}
+MEMORY_TOOL_NAMES = {
+    "add_episodic_memory", "get_episodic_memory", "search_episodic_memory",
+    "add_semantic_memory", "get_semantic_memory", "search_semantic_memory",
+}
+
+MEMORY_STORE_KEYWORDS = ("remember", "i prefer", "my name is")
+MEMORY_RECALL_KEYWORDS = ("recall", "what do you know", "what did i tell", "remind me")
+DATASET_KEYWORDS = ("win", "goal", "host", "compare", "summar", "top", "most", "average", "stats", "data")
+
 
 def node_update_memory(state: Dict[str, Any]) -> Dict[str, Any]:
     session_state = state["session_state"]
+    session_state.setdefault("history", []).append({"role": "user", "content": state["user_prompt"]})
+    return state
+
+
+# --- Dataset agent (scoped to FIFA World Cup tools only) -------------------
+
+def dataset_agent_system_prompt() -> str:
+    tools = [t for t in get_tool_catalog() if t["name"] in DATASET_TOOL_NAMES]
+    tool_lines = "\n".join(f"- {t['name']}: {t['description']}" for t in tools)
+    return (
+        "You are the Dataset agent. You answer questions about FIFA World Cup "
+        "winners using ONLY the tools below. You have no memory of past "
+        "conversations and no knowledge outside this dataset. Respond with "
+        'strict JSON: either {"tool": "<name>", "arguments": {...}} or '
+        '{"final_answer": "..."}.\n\n'
+        f"Tools:\n{tool_lines}"
+    )
+
+
+def node_dispatch_dataset(state: Dict[str, Any]) -> Dict[str, Any]:
     user_prompt = state["user_prompt"]
-    session_state.setdefault("history", []).append({"role": "user", "content": user_prompt})
-    update_memory(session_state, user_prompt, state["session_id"])
-    return state
+    plan = call_llm(dataset_agent_system_prompt(), user_prompt) or fallback_plan(user_prompt)
 
-
-def node_build_system_prompt(state: Dict[str, Any]) -> Dict[str, Any]:
-    state["system_prompt"] = make_system_prompt(state["session_state"])
-    return state
-
-
-def node_plan_llm(state: Dict[str, Any]) -> Dict[str, Any]:
-    plan = call_llm(state["system_prompt"], state["user_prompt"])
-    state["plan"] = plan
-    state["planner_used"] = "llm" if plan else None
-    return state
-
-
-def node_plan_fallback(state: Dict[str, Any]) -> Dict[str, Any]:
-    state["plan"] = fallback_plan(state["user_prompt"])
-    state["planner_used"] = "fallback"
-    return state
-
-
-def route_after_llm_plan(state: Dict[str, Any]) -> str:
-    if not state.get("plan"):
-        return "plan_fallback"
-    return route_after_plan(state)
-
-
-def route_after_plan(state: Dict[str, Any]) -> str:
-    plan = state.get("plan") or {}
-    return "format_answer" if "final_answer" in plan else "execute_tool"
-
-
-def node_execute_tool(state: Dict[str, Any]) -> Dict[str, Any]:
-    plan = state["plan"]
-    tool_name = plan.get("tool")
-    arguments = plan.get("arguments", {})
-    state["tool_name"] = tool_name
-    state["result"] = execute_tool(tool_name, arguments)
-    return state
-
-
-def node_format_answer(state: Dict[str, Any]) -> Dict[str, Any]:
-    plan = state["plan"]
     if "final_answer" in plan:
-        state["answer"] = plan["final_answer"]
+        text = plan["final_answer"]
+        tool_name = None
+    else:
+        tool_name = plan.get("tool")
+        result = execute_tool(tool_name, plan.get("arguments", {}))
+        text = format_result(tool_name, result)
+
+    state.setdefault("agent_outputs", []).append({"agent": "dataset", "text": text})
+    if tool_name:
+        state["dataset_tool_used"] = tool_name
+    state.setdefault("dispatched", set()).add("dataset")
+    return state
+
+
+# --- Memory agent (scoped to episodic/semantic memory tools only) ----------
+
+def memory_agent_system_prompt() -> str:
+    tools = [t for t in get_tool_catalog() if t["name"] in MEMORY_TOOL_NAMES]
+    tool_lines = "\n".join(f"- {t['name']}: {t['description']}" for t in tools)
+    return (
+        "You are the Memory agent. You store and recall facts the user "
+        "shares about themselves, using ONLY the tools below. You know "
+        "nothing about the FIFA World Cup dataset.\n\n"
+        f"Tools:\n{tool_lines}"
+    )
+
+
+def node_dispatch_memory(state: Dict[str, Any]) -> Dict[str, Any]:
+    user_prompt = state["user_prompt"]
+    lower_prompt = user_prompt.lower()
+    session_state = state["session_state"]
+
+    if any(keyword in lower_prompt for keyword in MEMORY_STORE_KEYWORDS):
+        before = len(session_state.get("facts", []))
+        update_memory(session_state, user_prompt, state["session_id"])
+        stored = len(session_state.get("facts", [])) > before
+        text = "Got it — I'll remember that." if stored else "I heard you, but couldn't pull out a specific fact to store."
+        state["memory_action"] = "store"
+    elif any(keyword in lower_prompt for keyword in MEMORY_RECALL_KEYWORDS):
+        hits = search_semantic_memory(user_prompt) + search_episodic_memory(user_prompt)
+        text = ("Here's what I recall: " + "; ".join(h.get("content", "") for h in hits[:3])) if hits \
+            else "I don't have anything stored about that yet."
+        state["memory_action"] = "recall"
+    else:
+        text = "No memory action was needed for that."
+        state["memory_action"] = "none"
+
+    state.setdefault("agent_outputs", []).append({"agent": "memory", "text": text})
+    state.setdefault("dispatched", set()).add("memory")
+    return state
+
+
+# --- Supervisor agent --------------------------------------------------------
+
+def supervisor_system_prompt(dispatched: set) -> str:
+    return (
+        "You are the Supervisor agent coordinating two specialists: 'dataset' "
+        "(FIFA World Cup statistics) and 'memory' (storing/recalling facts "
+        f"about the user). Already dispatched this turn: {sorted(dispatched) or ['none']}. "
+        'Decide the next step. Respond with strict JSON: {"route": "dataset"}, '
+        '{"route": "memory"}, or {"route": "final"} once no more specialists are needed.'
+    )
+
+
+def supervisor_fallback_route(user_prompt: str, dispatched: set) -> str:
+    lower_prompt = user_prompt.lower()
+    wants_memory = any(k in lower_prompt for k in MEMORY_STORE_KEYWORDS + MEMORY_RECALL_KEYWORDS)
+    wants_dataset = any(k in lower_prompt for k in DATASET_KEYWORDS)
+
+    if wants_memory and "memory" not in dispatched:
+        return "memory"
+    if wants_dataset and "dataset" not in dispatched:
+        return "dataset"
+    return "final"
+
+
+def node_supervisor_decide(state: Dict[str, Any]) -> Dict[str, Any]:
+    state["hops"] = state.get("hops", 0) + 1
+    dispatched = state.setdefault("dispatched", set())
+
+    if state["hops"] > MAX_SUPERVISOR_HOPS:
+        state["route"] = "final"
+        state.setdefault("route_history", []).append("final (max hops)")
         return state
 
-    tool_name = state.get("tool_name")
-    result = state.get("result")
-    answer = format_result(tool_name, result)
+    plan = call_llm(supervisor_system_prompt(dispatched), state["user_prompt"])
+    route = plan.get("route") if isinstance(plan, dict) else None
+    if route not in {"dataset", "memory", "final"}:
+        route = supervisor_fallback_route(state["user_prompt"], dispatched)
 
-    if os.getenv("OPENAI_API_KEY"):
-        final_prompt = (
-            f"The user asked: {state['user_prompt']}\n"
-            f"The tool used was: {tool_name}\n"
-            f"The tool result was: {json.dumps(result, ensure_ascii=False)}\n"
-            "Write a short, natural-language answer."
+    state["route"] = route
+    state.setdefault("route_history", []).append(route)
+    return state
+
+
+def route_from_supervisor(state: Dict[str, Any]) -> str:
+    route = state.get("route")
+    if route == "dataset":
+        return "dispatch_dataset"
+    if route == "memory":
+        return "dispatch_memory"
+    return "finalize_answer"
+
+
+# --- Finalize, memory recording, and response assembly ---------------------
+
+def node_finalize_answer(state: Dict[str, Any]) -> Dict[str, Any]:
+    outputs = state.get("agent_outputs", [])
+    if not outputs:
+        state["answer"] = (
+            "I can help you compare teams, find the leader in wins or goals, "
+            "summarize the dataset, or remember facts about you. Try asking: "
+            "'Which country has the most wins?'"
         )
-        llm_answer = call_llm(state["system_prompt"], final_prompt)
-        if llm_answer and "final_answer" in llm_answer:
-            answer = llm_answer["final_answer"]
-
-    state["answer"] = answer
+    else:
+        state["answer"] = " ".join(o["text"] for o in outputs)
     return state
 
 
@@ -716,20 +904,29 @@ def node_finalize_history(state: Dict[str, Any]) -> Dict[str, Any]:
     session_state = state["session_state"]
     session_state.setdefault("history", []).append({"role": "assistant", "content": state["answer"]})
     trim_history(session_state)
-    state["agent_state"] = build_agent_state(state["user_prompt"], state["plan"], state.get("tool_name"), session_state)
+
+    dispatched = state.get("dispatched", set())
+    if dispatched:
+        plan_summary = f"Supervisor dispatched: {', '.join(sorted(dispatched))} agent(s)."
+    else:
+        plan_summary = "Supervisor answered directly without dispatching a specialist."
+
+    facts = session_state.get("facts", [])
+    state["agent_state"] = {
+        "plan": plan_summary,
+        "tool_used": state.get("dataset_tool_used"),
+        "route_history": state.get("route_history", []),
+        "memory_facts": facts[-3:],
+        "episodic_count": len(STATE.get("episodes", [])),
+        "semantic_count": len(STATE.get("semantic_memories", [])),
+    }
     return state
-
-
-DATASET_TOOLS = {
-    "find_top_country_by_wins", "find_top_country_by_goals", "find_top_country_by_hosts",
-    "compare_countries", "summarize_dataset", "get_country_stats",
-}
 
 
 def node_record_memory(state: Dict[str, Any]) -> Dict[str, Any]:
     user_prompt, answer, session_id = state["user_prompt"], state["answer"], state["session_id"]
     try:
-        if state.get("tool_name") in DATASET_TOOLS:
+        if state.get("dataset_tool_used") in DATASET_TOOL_NAMES:
             add_semantic_memory(f"User asked: {user_prompt} -> Answer: {answer}", topic="dataset_fact", session_id=session_id)
     except Exception:
         pass
@@ -757,22 +954,20 @@ def node_save_and_respond(state: Dict[str, Any]) -> Dict[str, Any]:
 def build_agent_graph() -> CompiledGraph:
     graph = StateGraph()
     graph.add_node("update_memory", node_update_memory)
-    graph.add_node("build_system_prompt", node_build_system_prompt)
-    graph.add_node("plan_llm", node_plan_llm)
-    graph.add_node("plan_fallback", node_plan_fallback)
-    graph.add_node("execute_tool", node_execute_tool)
-    graph.add_node("format_answer", node_format_answer)
+    graph.add_node("supervisor_decide", node_supervisor_decide)
+    graph.add_node("dispatch_dataset", node_dispatch_dataset)
+    graph.add_node("dispatch_memory", node_dispatch_memory)
+    graph.add_node("finalize_answer", node_finalize_answer)
     graph.add_node("finalize_history", node_finalize_history)
     graph.add_node("record_memory", node_record_memory)
     graph.add_node("save_and_respond", node_save_and_respond)
 
     graph.set_entry_point("update_memory")
-    graph.add_edge("update_memory", "build_system_prompt")
-    graph.add_edge("build_system_prompt", "plan_llm")
-    graph.add_conditional_edges("plan_llm", route_after_llm_plan)
-    graph.add_conditional_edges("plan_fallback", route_after_plan)
-    graph.add_edge("execute_tool", "format_answer")
-    graph.add_edge("format_answer", "finalize_history")
+    graph.add_edge("update_memory", "supervisor_decide")
+    graph.add_conditional_edges("supervisor_decide", route_from_supervisor)
+    graph.add_edge("dispatch_dataset", "supervisor_decide")
+    graph.add_edge("dispatch_memory", "supervisor_decide")
+    graph.add_edge("finalize_answer", "finalize_history")
     graph.add_edge("finalize_history", "record_memory")
     graph.add_edge("record_memory", "save_and_respond")
     graph.add_edge("save_and_respond", END)
