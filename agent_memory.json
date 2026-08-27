@@ -223,6 +223,12 @@
       "session_id": "c4c7ee4f-2866-419f-b934-ae42c3cb37b8",
       "time": "2026-08-14T04:43:35.405945Z",
       "content": "User: Summarize the dataset -> Assistant: There are 10 countries in the dataset. The top wins country is Brazil and the top goals country is Brazil."
+    },
+    {
+      "id": "06166f9b-9306-4746-8257-2862465eeb8a",
+      "session_id": "c4c7ee4f-2866-419f-b934-ae42c3cb37b8",
+      "time": "2026-08-27T04:24:47.563721Z",
+      "content": "User: Which country has the most wins? -> Assistant: Brazil has the most wins with 5 wins."
     }
   ],
   "semtest": {
@@ -367,6 +373,13 @@
       "topic": "dataset_fact",
       "time": "2026-08-14T04:43:35.402492Z",
       "content": "User asked: Summarize the dataset -> Answer: There are 10 countries in the dataset. The top wins country is Brazil and the top goals country is Brazil."
+    },
+    {
+      "id": "2ee4e23c-f5b3-48fd-ad21-d1fb1ca01413",
+      "session_id": "c4c7ee4f-2866-419f-b934-ae42c3cb37b8",
+      "topic": "dataset_fact",
+      "time": "2026-08-27T04:24:47.559223Z",
+      "content": "User asked: Which country has the most wins? -> Answer: Brazil has the most wins with 5 wins."
     }
   ],
   "semtest2": {
@@ -546,6 +559,14 @@
       {
         "role": "assistant",
         "content": "There are 10 countries in the dataset. The top wins country is Brazil and the top goals country is Brazil."
+      },
+      {
+        "role": "user",
+        "content": "Which country has the most wins?"
+      },
+      {
+        "role": "assistant",
+        "content": "Brazil has the most wins with 5 wins."
       }
     ],
     "facts": []
