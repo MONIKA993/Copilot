@@ -202,7 +202,7 @@ def update_memory(session_state: Dict[str, Any], user_prompt: str, session_id: O
     lower_prompt = prompt.lower()
     fact = None
     if "remember" in lower_prompt:
-        fact = prompt.split("remember", 1)[1].strip().strip(".?!")
+        fact = prompt[lower_prompt.index("remember") + len("remember"):].strip().strip(".?!")
     elif "i prefer" in lower_prompt:
         fact = prompt.strip().rstrip(".?!")
     elif "my name is" in lower_prompt:

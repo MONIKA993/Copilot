@@ -24,6 +24,14 @@ class ToolCatalogTests(unittest.TestCase):
         self.assertEqual(promt.get_semantic_memory(1)[0]["content"], "Brazil is the top wins country")
         self.assertGreaterEqual(len(promt.search_semantic_memory("Brazil")), 1)
 
+    def test_memory_update_handles_capitalized_remember(self):
+        promt.STATE = {"episodes": [], "semantic_memories": []}
+        session_state = {"history": [], "facts": []}
+
+        promt.update_memory(session_state, "Remember that I prefer short answers.", "s1")
+
+        self.assertEqual(session_state["facts"], ["that I prefer short answers"])
+
 
 if __name__ == "__main__":
     unittest.main()
